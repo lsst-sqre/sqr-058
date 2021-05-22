@@ -317,14 +317,14 @@ Kafka-aggregator
 The `kafka-aggregator`_ tool is based on `Faust`_, a Python Stream Processing library.
 It implements Faust agents that consume a source topics from Kafka and produce a new aggregated topics.
 
-The aggregated topic schema is createad based on the source topic schema with some support to `exclude fields`_.
-The result is a new window aggregated stream where the window size sets the frequency of the stream.
+The aggregated topic schema is created based on the source topic schema with some support to `exclude fields`_.
+The result is a new aggregated stream with new aggregated fields where the size of the aggregation window sets the frequency of the stream.
 
 .. _exclude fields: https://kafka-aggregator.lsst.io/configuration.html#kafka-aggregator-settings
 
 In the EFD transformation service, this can be optional, e.g., low frequency streams like the transformed ``WeatherStation`` telemetry stream do not need further aggregation.
 
-The above suggests that `kafka-aggregator` could be extended to produce the *transformed telemetry topic* and that computing field aggregations over time should be an optional step.
+The above suggests that `kafka-aggregator` could be extended to produce the *transformed telemetry topic* and that computing window aggregations should be an optional step.
 
 .. note::
 
@@ -348,8 +348,11 @@ Faust also supports different `join strategies`_.
 Mapping and transformation
 --------------------------
 
-`kafka-aggregator`_ requires a new mechanism to configure the mapping from source topics, and fields within those topics, to the aggregated topics.
-The same configuration can be used to specify functions to transform the field values, if needed, and to enable or disable window aggregation on fields.
+`kafka-aggregator`_ requires a new mechanism to define the schema for the aggregated topics.
+In this implementation, `kafka-aggregator`_ configures a mapping of source topics to an aggregated topic.
+In particular, this implementation replaces the configuration options to exclude topics and fields from aggregation, and explicitly lists the source topics and the fields used in the mapping instead.
+
+In the same mapping configuration, we can specify functions to transform the field values, if needed, and enable or disable window aggregation on fields.
 
 We propose replacing the `kafka-aggregator settings`_ by an YAML file like the following:
 
