@@ -48,7 +48,7 @@
 
    **This technote is not yet published.**
 
-   Initial design for the EFD schema in the consolidated database, and stream processing tasks required to transform the raw telemetry data into the version published to the Science Platform users.
+   Initial design for the EFD Transformation Service and stream processing tasks required to transform the raw EFD telemetry data into a format published into the Consolidated Database to the Science Platform science users.
 
 
 Introduction
@@ -88,7 +88,7 @@ Figure 1 shows the components of the EFD transformation service at LDF.
 EFD telemetry topics
 ====================
 
-May 10, 2021, `ts_xml`_ defines the schema for 249 Telemetry, 390 Commands, and 533 Events topics for 62 different Observatory subsystems.
+May 10, 2021, `ts_xml`_ defines the schema for 248 Telemetry, 352 Commands, and 561 Events topics for 62 different Observatory subsystems.
 
 SAL translates the ``ts_xml`` schemas for each topic into IDL schemas used by DDS. The IDL schemas are then translated to Avro schemas and registered in the EFD when the SAL Kafka producers are initialized.
 
@@ -193,18 +193,21 @@ Let's use the ``WeatherStation`` telemetry topics to examplify the creation of a
    "windSpeed.avg2M","2 minutes average value for windSpeed","m/s"
 
 
-- The transformed ``WeatherStation`` telemetry table combines information from multiple ``WeatherStation`` telemetry topics.
 
-- Fields that are not relevant to the Science Platform science user are excluded. In particular, most of the ``private_`` fields added by SAL can be excluded and others reduced to a *single* ``timestamp`` field.
+The transformed ``WeatherStation`` telemetry table combines information from multiple ``WeatherStation`` telemetry topics. These are sensible decisions when making this table:
 
-- In this particular example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We decided to keep only the fields with "1 minute average values", which are available in most of the cases, and leave it up to the user to compute aggregations in SQL as needed.
+- Fields that are not relevant to the Science Platform science user can be excluded. In particular, most of the ``private_`` fields added by SAL can be excluded.
 
-- Field names are namespaced to identify the original EFD topic.
+- We need only one ``timestamp`` field.
 
-From this example, we conclude that to create a *transformed telemetry table*, the EFD transformation service must be able to specify a mapping between the source telemetry topics and the *transformed telemetry table*, and specify which fields within those topics to use.
-In some cases, it must be able to apply transformations to the fields' values, and allows for new descriptions and units for the transformed fields.
+- In this particular example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We keep only the "1 minute average values" fields, which are available in most of the cases, and leave it up to the user to compute aggregations in SQL as needed.
 
-In other words, the EFD transformation service holds the transformations (decisions) necessary to create the Consolidated Database telemetry tables from the raw EFD telemetry topics.
+- In the transformed table, field names are namespaced to identify the original EFD topic.
+
+From this example, and after looking at a handful of other T&S subsystems, we conclude that to create a *transformed telemetry table*, the EFD transformation service must specify a mapping between the source telemetry topics and the *transformed telemetry table*, and which fields within those topics to use.
+In some cases, it must be able to apply transformations to the fields' values, and must allow for new descriptions and units for the transformed fields.
+
+In other words, the EFD transformation service holds the decisions necessary to create the Consolidated Database telemetry tables from the raw EFD telemetry topics.
 
 Advantages
 ----------
