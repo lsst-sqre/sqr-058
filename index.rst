@@ -191,26 +191,30 @@ Let's use the ``WeatherStation`` telemetry topics to examplify the creation of a
    "weather.ambient_temp","The ambient temperature.","deg_C"
    "weather.humidity","The humidity.","%"
    "weather.pressure","The pressure outside.","hPa"
-   "windDirection.avg2M","2 minutes average value for windDirection","deg"
+   "windDirection.value","1 minute average value for windDirection","deg"
    "windGustDirection.value10M","value for the last 10 minutes for windDirection","deg"
-   "windSpeed.avg2M","2 minutes average value for windSpeed","m/s"
+   "windSpeed.value","1 minute average value for windSpeed","m/s"
 
 
 
-The transformed ``WeatherStation`` telemetry table combines information from multiple ``WeatherStation`` telemetry topics. These are sensible decisions when making this table:
+The transformed ``WeatherStation`` telemetry table combines information from multiple ``WeatherStation`` telemetry topics. These are sensible decisions for the ``WeatherStation`` table schema:
 
 - Fields that are not relevant to the Science Platform science user can be excluded. In particular, most of the ``private_`` fields added by SAL can be excluded.
 
-- We need only one ``timestamp`` field.
+- In this particular example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We decied to keep only the "1 minute average" fields, the higher resolution value which is available for all the ``WeatherStation`` telemetry topics. Note that despite their names, the ``value`` and ``value10M`` fields for the `windDirection`, `windSpeed` and `windDirection` topics also have 1 minute average values.
 
-- In this particular example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We keep only the "1 minute average values" fields, which are available in most of the cases, and leave it up to the user to compute aggregations in SQL as needed.
+- In the transformed table, we decided to prefix the fields with the corresponding ``WeatherStation`` topic name to make it easier to identify its provenance.
 
-- In the transformed table, field names are namespaced to identify the original EFD topic.
+- The `timestamp` field in the transformed table is derived from the `private_efdStamp` field. The other timestamps are discarded. Note that the timestamps from the ``WeatherStation`` telemetry topics are not necessarilly aligned. The process of joining the source streams is discussed in more details in section :ref:`joining`.
 
-From this example, and after looking at a handful of other T&S subsystems, we conclude that to create a *transformed telemetry table*, the EFD transformation service must specify a mapping between the source telemetry topics and the *transformed telemetry table*, and which fields within those topics to use.
-In some cases, it must be able to apply transformations to the fields' values, and must allow for new descriptions and units for the transformed fields.
 
-In other words, the EFD transformation service holds the decisions necessary to create the Consolidated Database telemetry tables from the raw EFD telemetry topics.
+From this example, and also after looking at a handful of other T&S subsystems, we conclude that:
+
+- the EFD transformation service must specify a mapping between the source telemetry topics and the *transformed telemetry table*, and which fields within those topics to use.
+
+- in some cases the EFD transformation service needs to apply transformations to the fields' values, and must allow for new descriptions and units for the transformed fields.
+
+In other words, the *EFD transformation service holds the decisions* necessary to create the transformed telemetry tables from the raw EFD telemetry topics.
 
 Advantages
 ----------
@@ -336,6 +340,8 @@ The above suggests that `kafka-aggregator` could be extended to produce the *tra
 
    We decided to keep the name `kafka-aggregator`_ for the extended tool because joining related streams to produce a single stream is also a form of aggregation.
 
+
+.. _joining:
 
 Joining source streams
 ----------------------
