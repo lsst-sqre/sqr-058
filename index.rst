@@ -118,6 +118,7 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
 
 .. csv-table:: WeatherStation.dewPoint
@@ -134,6 +135,7 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
 
 .. csv-table:: WeatherStation.windSpeed
@@ -154,6 +156,7 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
    "value","Instantaneous value","m/s"
 
@@ -175,7 +178,7 @@ Let's use the ``WeatherStation`` telemetry topics to examplify the creation of a
    :header: "Name", "Description", "Units"
    :widths: 15, 30, 5
 
-   "timestamp", "Average timestamp from private_sndStamp in UTC"
+   "timestamp", "Timestamp from the private_efdStamp field aggregated on 1 minute window."
    "airPressure.paAvg1M","1 minute average value for airPressure","hPa"
    "airTemperature.avg1M","1 minute average value for airTemperature","deg_C"
    "dewPoint.avg1M","1 minute average value for dewPoint","deg_C"
