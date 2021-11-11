@@ -48,27 +48,27 @@
 
    **This technote is not yet published.**
 
-   Initial design for the EFD schema in the consolidated database, and stream processing tasks required to transform the raw telemetry data into the version published to the Science Platform users.
+   Initial design for the EFD Transformation Service and stream processing tasks required to transform the raw EFD telemetry data into the format published in the Consolidated Database for the Science Platform users.
 
 
 Introduction
 ============
 
-The current implementation of the `Engineering and Facilities Database (EFD)`_ is based on InfluxDB, an open source time series platform optimized for efficient storage and analysis of time series data.
+The `Engineering and Facilities Database (EFD)`_ stores data primarily on `InfluxDB`_, an open source time series platform optimized for efficient storage and analysis of time series data.
 
-While the Summit EFD instance is used for real-time monitoring of the Observatory, the raw data stream (Telemetry, Events, and Commands) is also `replicated to the LSST Data Facility (LDF)`_, and accessible to the project at large via the LDF EFD instance.
+At the Summit, InfluxDB + Chronograf + Kapacitor are used for real-time monitoring of the observatory systems. The raw data stream (Telemetry, Events, and Commands) is also `replicated to the LSST Data Facility (LDF)`_ using Kafka, and made available to the project at large through LDF EFD instance.
 
 In this technote, we revisit the EFD transformation service, initially described in `DMTN-050`_.
-The main goal of the EFD transformation service is to curate the EFD telemetry data, relate it to the observations, and publish it to the Consolidated Database enabling access to the Science Platform science users.
+The goal of the EFD transformation service is to curate the EFD telemetry data, relate it to the observations, and publish it into the Consolidated Database for the Science Platform users.
 
-In particular, we review the EFD architecture and the components of the EFD transformation service. 
-We analyze the schemas of telemetry topics from different Observatory subsystems and suggest an approach for creating *transformed telemetry tables* in the Consolidated Database.
+We review the EFD architecture and describe the components of the EFD transformation service. 
 
-We show how the Kafka Connect JDBC Sink connector can create, evolve the schema, and write to the *transformed telemetry tables* consuming the *transformed telemetry streams*.
+We suggest an approach for creating *transformed telemetry tables* in the Consolidated Database from *transformed telemetry streams* in Kafka which are produced by `kafka-aggregator`_ from Kafka *raw telemetry streams*.
 
-Finally, we discuss how to extend the `kafka-aggregator`_ tool to produce the *transformed telemetry streams*.
+Finally, we discuss extensions to the `kafka-aggregator`_ tool to produce the *transformed telemetry streams*.
 
 .. _Engineering and Facilities Database (EFD): https://sqr-034.lsst.io
+.. _InfluxDB: https://www.influxdata.com/time-series-database/
 .. _replicated to the LSST Data Facility (LDF): https://sqr-050.lsst.io
 .. _DMTN-050: https://dmtn-050.lsst.io
 .. _kafka-aggregator: https://kafka-aggregator.lsst.io
@@ -77,7 +77,7 @@ Finally, we discuss how to extend the `kafka-aggregator`_ tool to produce the�
 Architecture
 ============
 
-Figure 1 shows the components of the EFD transformation service at LDF.
+Figure 1 shows the components of the EFD transformation service.
 
 .. figure:: /_static/efd_transformation_service.svg
    :name: EFD transformation service
@@ -85,21 +85,31 @@ Figure 1 shows the components of the EFD transformation service at LDF.
    Components of the EFD transformation service
 
 
-EFD telemetry topics
-====================
 
-May 10, 2021, `ts_xml`_ defines the schema for 249 Telemetry, 390 Commands, and 533 Events topics for 62 different Observatory subsystems.
+As of May 2021, `ts_xml`_ defines the schema for 248 Telemetry, 352 Commands, and 561 Event topics for 62 different observatory systems.
 
-SAL translates the ``ts_xml`` schemas for each topic into IDL schemas used by DDS. The IDL schemas are then translated to Avro schemas and registered in the EFD when the SAL Kafka producers are initialized.
+SAL translates the ``ts_xml`` schemas into IDL schemas used by DDS. The IDL schemas are then translated to Avro schemas and registered in the EFD by the SAL Kafka producers at the Summit.
+The Avro schemas, Kafka topics configuration and the raw telemetry streams are replicated to the LDF EFD.
+At LDF, we use Kafka Connect connectors to consume the Kafka stream, in particular, the raw telemetry stream is record in InfluxDB and in Parquet files.
 
-In this investigation, we assume that the leading interest of Science Platform science users is the EFD Telemetry data, and that *Events and Commands do not need to be recorded into the Consolidated Database* (see section :ref:`discussion`).
+The new components in the EFD architecture are i) `kafka-aggregator` which is responsible for consuming the *raw telemetry streams* and producing the *transformed telemetry streams*, and ii) the `JDBC Sink Connector` which is responsible to record the *transformed telemetry streams* into the Consolidated Database (PostgreSQL) for long-term persistence.
 
-In this section, we analyze the schemas for several `Observatory subsystems`_ and use the `WeatherStation` subsystem as an example.
+Once we have the  *transformed telemetry tables* in PostgreSQL, they can be accessed by the Science Platform users via the TAP service.
 
-Example: the WeatherStation subsystem
--------------------------------------
+.. note::
 
-The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``airTemperature``,  ``dewPoint``, ``precipitation``, ``relativeHumidity``, ``snowDepth``, ``soilTemperature``, ``solarNetRadiation``, ``weather``, ``windDirection``, ``windGustDirection``, and ``windSpeed``. For simplicity, we show the schemas for 3 of them:
+   In this investigation, we assume that Science Platform users are interested only on telemetry data. We are not planning on recording commands and events in the Consolidated Database, however, see section :ref:`discussion`.
+
+.. note::
+
+   If we decide to record the *transformed telemetry streams* into InfluxDB or into Parquet files rather than in PostgreSQL, the `kafa-aggregator` work disscussed in section :ref:`kafka-aggregator-extensions` is still relevant.
+
+Example: the WeatherStation data
+================================
+
+In this section, we show the schemas for the raw `WeatherStation` telemetry topics to illustrate the transformations required.
+
+The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``airTemperature``,  ``dewPoint``, ``precipitation``, ``relativeHumidity``, ``snowDepth``, ``soilTemperature``, ``solarNetRadiation``, ``weather``, ``windDirection``, ``windGustDirection``, and ``windSpeed``. For simplicity, we only show the schemas for three of them:
 
 .. csv-table:: WeatherStation.airTemperature
    :header: "Name", "Description", "Units"
@@ -118,6 +128,7 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
 
 .. csv-table:: WeatherStation.dewPoint
@@ -134,6 +145,7 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
 
 .. csv-table:: WeatherStation.windSpeed
@@ -154,28 +166,26 @@ The ``WeatherStation`` subsystem has 12 telemetry topics:  ``airPressure``, ``ai
    "private_revCode","Revision code of topic","unitless"
    "private_seqNum","Sequence number","unitless"
    "private_sndStamp","TAI at sender","second"
+   "private_efdStamp","UTC timestamp computed from private_sndStamp","second"
    "sensorName","Sensor model used to measure this parameters","unitless"
    "value","Instantaneous value","m/s"
 
-A similar topic structure is seen in all the `Observatory subsystems`_.
-If we simply reproduce the raw EFD telemetry topics into the Consolidated Database we would have 249 individual tables that would be hard to query.
+A similar topic structure is seen accross all `Observatory subsystems`_.
 
-The EFD transformation service is an opportunity to curate the raw EFD telemetry data and publish it to the Science Platform science users in a more meaningful manner.
-
-In the next section we discuss our approach for creating the *Transformed telemetry tables* in the Consolidated Database.
+If we simply reproduce the raw telemetry topics into the Consolidated Database we would have 248 individual tables, which makes it difficult to query and join with other tables in the Consolidated Database (e.g. the Exposure table).
 
 .. _Observatory subsystems: https://ts-xml.lsst.io/sal_interfaces/index.html
 
 Transformed telemetry tables
-============================
+----------------------------
 
-Let's use the ``WeatherStation`` telemetry topics to examplify the creation of a *transformed telemetry table*.
+Let's use the ``WeatherStation`` data to examplify the creation of a *transformed telemetry table*.
 
 .. csv-table:: Transformed WeatherStation telemetry table
    :header: "Name", "Description", "Units"
    :widths: 15, 30, 5
 
-   "timestamp", "Average timestamp from private_sndStamp in UTC"
+   "timestamp", "Timestamp from the private_efdStamp field aggregated on 1 minute window."
    "airPressure.paAvg1M","1 minute average value for airPressure","hPa"
    "airTemperature.avg1M","1 minute average value for airTemperature","deg_C"
    "dewPoint.avg1M","1 minute average value for dewPoint","deg_C"
@@ -188,41 +198,51 @@ Let's use the ``WeatherStation`` telemetry topics to examplify the creation of a
    "weather.ambient_temp","The ambient temperature.","deg_C"
    "weather.humidity","The humidity.","%"
    "weather.pressure","The pressure outside.","hPa"
-   "windDirection.avg2M","2 minutes average value for windDirection","deg"
+   "windDirection.value","1 minute average value for windDirection","deg"
    "windGustDirection.value10M","value for the last 10 minutes for windDirection","deg"
-   "windSpeed.avg2M","2 minutes average value for windSpeed","m/s"
+   "windSpeed.value","1 minute average value for windSpeed","m/s"
+
+The rationale for the suggested schema is the following:
+
+- The transformed ``WeatherStation`` telemetry table combine information from multiple raw ``WeatherStation`` telemetry topics.
+
+- Fields that are not relevant to the Science Platform user can be excluded. In particular, most of the ``private_`` fields added by SAL can be excluded.
+
+- In this example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We decided to keep only the "1 minute average" fields, which is the higher resolution available for all the ``WeatherStation`` telemetry topics.
+
+Note: despite their names, the ``value`` and ``value10M`` fields for the ``windDirection``, ``windSpeed`` and ``windDirection`` topics also have 1 minute average values.
+
+- In the transformed table, we decided to prefix the fields with the source ``WeatherStation`` topic name to identify its origin.
+
+- The ``timestamp`` field in the transformed table is derived from the ``private_efdStamp`` field. The other timestamps are discarded.
 
 
-- The transformed ``WeatherStation`` telemetry table combines information from multiple ``WeatherStation`` telemetry topics.
+Note: the timestamps from the raw ``WeatherStation`` telemetry topics are not necessarilly aligned, see section :ref:`joining` for details.
 
-- Fields that are not relevant to the Science Platform science user are excluded. In particular, most of the ``private_`` fields added by SAL can be excluded and others reduced to a *single* ``timestamp`` field.
+From this example, and also after looking at a handful of other T&S subsystems, we conclude that:
 
-- In this particular example, the original topics have aggregated fields like ``min24H``, ``avg24H``, ``max24H``. We decided to keep only the fields with "1 minute average values", which are available in most of the cases, and leave it up to the user to compute aggregations in SQL as needed.
+- the EFD transformation service must specify a mapping between the source telemetry topics and the *transformed telemetry table*, and which fields within those topics to use.
 
-- Field names are namespaced to identify the original EFD topic.
+- in some cases the EFD transformation service needs to apply transformations to the fields' values, and must allow for new descriptions and units for the transformed fields.
 
-From this example, we conclude that to create a *transformed telemetry table*, the EFD transformation service must be able to specify a mapping between the source telemetry topics and the *transformed telemetry table*, and specify which fields within those topics to use.
-In some cases, it must be able to apply transformations to the fields' values, and allows for new descriptions and units for the transformed fields.
-
-In other words, the EFD transformation service holds the transformations (decisions) necessary to create the Consolidated Database telemetry tables from the raw EFD telemetry topics.
+The *EFD transformation service holds the decisions* necessary to create the transformed telemetry tables from the raw telemetry topics.
 
 Advantages
 ----------
 
 Some advantages of this approach:
 
-- Instead of 249 tables we might have 62, one per subsystem, or even less. By reducing the number of tables in the Consolidated Database we simplify the queries considerably by avoiding multiple joins. It also simplifies creating relations in the database among the telemetry tables and the Exposure table.
+- Instead of 249 tables we might have 62, one per subsystem, or even less. By reducing the number of tables in the Consolidated Database we simplify the queries considerably and reduce the number of joins and relations in the database.
 
-- By exposing only the relevant information to the Science Platform science user, we also reduce the amount of data in the Consolidated Database making it more managable over time.
+- By exposing only the relevant information to the Science Platform user, we also reduce the amount of data in the Consolidated Database making it more managable over time.
 
 - By transforming field values, we add value and make the EFD telemetry data easier to use.
 
 - Another task of the EFD transformation service is the aggregation of field values over time for high-frequency telemetry streams, which also reduces the amount of data in the Consolidated Database to a great extent.
 
-In the following sections, we describe the Kafka Connect JDBC Sink connector and the ``kafka-aggregator`` tool. We try to use the JDBC Sink connector functionalities as much as possible, and delegate to the ``kafka-aggregator`` tool the functionalities that cannot be performed by the connector.
+In the following sections, we describe the Kafka Connect JDBC Sink connector and ``kafka-aggregator``. We try to use the JDBC Sink connector features as much as possible, and delegate to ``kafka-aggregator`` the functionalities that cannot be performed by the connector.
 
 .. _ts_xml: https://ts-xml.lsst.io/sal_interfaces
-.. _planned to be in UTC: https://jira.lsstcorp.org/browse/RFC-767
 
 The Kafka Connect JDBC Sink connector
 =====================================
@@ -270,7 +290,7 @@ Support to ``ARRAY`` data type in PostgresSQL was `added just recently`_ to the 
 Handling timestamps
 ^^^^^^^^^^^^^^^^^^^
 
-In ``ts_xml``, timestamps are Unix timestamps with millisecond precision and have ``double`` (64-bit) types. In the Consolidated Database, we want timestamps created with a proper data type to use SQL functions to operate with timestamps.
+In ``ts_xml``, timestamps are Unix timestamps in secods with ``double`` (64-bit) precision. In the Consolidated Database, we want timestamps created with a proper data type to use SQL functions to operate with timestamps.
 The ``setTimestampType`` JDBC Sink transform can be used to change the data type for the ``timestamp`` field in the *transformed telemetry tables*.
 
 .. code-block:: json
@@ -294,48 +314,52 @@ To do that, ``pk.mode`` must be set to ``record_value`` to use one or more field
 Working with multiple tables
 ----------------------------
 
-When `working with multiple tables`_, the ingestion time in the Consolidated Database can be reduced by addind more Kafka Connect workers.
-There are two ways to do this with the Kafka Connect framework.
+When `working with multiple tables`_, database ingestion can be improved by adding more Kafka Connect workers.
+There are two ways of doing this within the Kafka Connect framework.
 One is to define multiple connectors, one for each table.
 The other is to create a single connector but increase the number of connector tasks.
 
-With the InfluxDB Sink and MirrorMaker 2 connectors, creating a single connector and increasing the number of connector tasks works fine to handle the current data throughput in the EFD.
-This should work with the JDBC Sink connector too, as long as we can use the same connector configuration with all the *transformed telemetry tables*.
+With the InfluxDB Sink, MirrorMaker 2 and S3 Sink connectors, creating a single connector and increasing the number of connector tasks seems enough to handle the current data throughput in the EFD.
+This should work with the JDBC Sink connector too, as long as we can use the same connector configuration for all tables.
 
 .. _working with multiple tables: https://www.confluent.io/blog/kafka-connect-deep-dive-jdbc-source-connector/#multiple-tables
+
+
+.. _kafka-aggregator-extensions:
 
 Transformed telemetry streams
 =============================
 
-A table is the materialization of a stream. In the previous section, we showed how the JDBC Sink connector can be used to create the *transformed telemetry tables*.
+A table is the materialization of a stream. In the previous section, we showed how the JDBC Sink connector can be used to create the *transformed telemetry tables* in a relational database like PostgreSQL.
 
-In this section, we discuss how to extend the `kafka-aggregator`_ tool to produce the *transformed telemetry streams*.
+In this section, we discuss extensions to `kafka-aggregator`_ to produce the *transformed telemetry streams*.
 
 Kafka-aggregator
 ----------------
 
-The `kafka-aggregator`_ tool is based on `Faust`_, a Python Stream Processing library.
-It implements Faust agents that consume a source topics from Kafka and produce a new aggregated topics.
+`kafka-aggregator`_ is based on `Faust`_, a Python Stream Processing library.
+It implements Faust agents that subscribe to one kafka topic and produce a new aggregated topic.
 
-The aggregated topic schema is createad based on the source topic schema with some support to `exclude fields`_.
-The result is a new window aggregated stream where the window size sets the frequency of the stream.
+In the current implementation `kafka-aggregator`_ computes summary statistics on `tumbling windows`_ (window aggregation), where the size of the window sets the frequency of the aggregated stream.
+However, it can aggregate only one source topic and produced one aggregrated topic at the time (the 1:1 case).
 
-.. _exclude fields: https://kafka-aggregator.lsst.io/configuration.html#kafka-aggregator-settings
-
-In the EFD transformation service, this can be optional, e.g., low frequency streams like the transformed ``WeatherStation`` telemetry stream do not need further aggregation.
-
-The above suggests that `kafka-aggregator` could be extended to produce the *transformed telemetry topic* and that computing field aggregations over time should be an optional step.
+The main extensions to `kafka-aggregator`_ include the ability of joining multiple Kafka topics into one source stream, and transformations like filtering and mapping in addition to window aggregation.
+All of these transformations are chained together to produce the `transformed teletemery streams`.
 
 .. note::
 
-   We decided to keep the name `kafka-aggregator`_ for the extended tool because joining related streams to produce a single stream is also a form of aggregation.
+   Despite of these changes in `kafka-aggregator`_ we decided to keep its name because combining information from multiple source topics into a single stream is also a form of aggregation.
+
+.. _tumbling windows: https://faust.readthedocs.io/en/latest/userguide/tables.html#windowing
 
 
-Joining source streams
-----------------------
+.. _joining:
+
+Joining
+-------
 
 With `Faust`_, it is possible to subscribe to multiple source topics by listing them in the `topic description`_.
-Faust also supports different `join strategies`_.
+Faust also supports other `join strategies`_.
 
 .. note::
 
@@ -345,29 +369,31 @@ Faust also supports different `join strategies`_.
 .. _join strategies: https://faust.readthedocs.io/en/latest/reference/faust.joins.html?highlight=join
 
 
-Mapping and transformation
---------------------------
+Filtering and mapping
+---------------------
 
-`kafka-aggregator`_ requires a new mechanism to configure the mapping from source topics, and fields within those topics, to the aggregated topics.
-The same configuration can be used to specify functions to transform the field values, if needed, and to enable or disable window aggregation on fields.
+The extended `kafka-aggregator`_ requires a new mechanism to define the schema for the aggregated topics.
+In the new implementation, `kafka-aggregator`_ specify the source Kafka topics to an aggregated Kafka topic, by explicilty listing the source topics and fields to use.
 
-We propose replacing the `kafka-aggregator settings`_ by an YAML file like the following:
+In the same mapping configuration, we can specify functions to transform the field values (map), if needed, and enable or disable window aggregation on fields.
+
+We propose replacing some the `kafka-aggregator settings`_ by a configuration file like the following:
 
 .. code-block:: yaml
 
    ---
    aggregated_topic_name1:
-      mapping:
+      filter:
          source_topic_name1:
             field1:
                name: new_name
                description: "new description for the transformed field"
                units: "new units for the transformed field"
-               transformation: func1
+               map: func1
             field2:
                description: "new description for the transformed field"
                units: "new units for the transformed field"
-               transformation: func2
+               map: func2
             field3:
             ...
          source_topic_name2:
@@ -378,11 +404,12 @@ We propose replacing the `kafka-aggregator settings`_ by an YAML file like the f
          ...
    aggregated_topic_name2:
       window_aggregation_size: 1s
+      window_expiration_seconds: 1s
       operations:
          - min
          - median
          - max
-      mapping:
+      filter:
          source_topic_name3:
             field1:
             field2:
@@ -391,16 +418,20 @@ We propose replacing the `kafka-aggregator settings`_ by an YAML file like the f
          ...
    ...
 
-In this YAML file, we specify the aggregated topics (the destination topics in Kafka where the *transformed telemetry streams* are produced to), the source topics in Kafka to consume from, and the fields within those topics to use.
+In this configuration, we specify the aggregated topic (the new topic in Kafka where the aggregated data is produced to), the source topics in Kafka to consume from, and the fields within those topics to use.
 
-For each field in the aggregated topic, we can specify optionally a name, adescription, units and a transformation function.
-If not specified, the default field name, description and units are obtained from the source topic schema.
-If a transformation function is specified, it is used to transform the field values.
+For each field, we can specify optionally a name, a description, units and a function (map) to transform its values.
+If not specified, the default field name, description, and units are obtained from the source topic schema.
+If a map is not specified, the value from the source field is used.
 
-The ``window_aggregation_size`` configuration can be specified in the YAML file per aggregated topic, indicating that the summary statistics operations configured in ``operations`` should be computed for each numeric field in the mapping after the transformation is applied, if any.
-Currently, the allowed summary statistics computed by ``kafka-aagregator`` are ``min``, ``q1``, ``mean``, ``median``, ``q3``, ``stdev`` and ``max``.
+Window aggregation
+------------------
 
-Finally, we expect to reuse the `Aggregator class`_ in `kafka-aggregator`_ to create the Faust-avro record and the Avro schema for the aggregated topic with little modification.
+For each aggregated topic we can optionally specify the window aggregation transformation, configuring the tumbling window parameters and the summary statistics to compute (operations).
+
+The allowed operations are ``min``, ``q1``, ``mean``, ``median``, ``q3``, ``stdev`` and ``max``.
+
+The window aggregation is computed after the map transformation if any.
 
 .. _kafka-aggregator settings: https://kafka-aggregator.lsst.io/v/dependabot-docker-python-3.9.5-buster/configuration.html#kafka-aggregator-settings
 .. _aggregated topic name: https://kafka-aggregator.lsst.io/configuration.html#aggregation-topic-name
@@ -431,16 +462,16 @@ Telemetry is essential for science users to correlate with data quality after da
 
 **What happens if the science user needs data from the EFD that is not published to the Consolidated Database?**
 
-That is a common problem of designing a schema upfront and perhaps the most sensitive aspect of EFD transformation service.
+That is a common problem of defining a schema upfront and perhaps the most sensitive aspect of EFD transformation service design.
 
-The proposed solution is flexible enough to allow changes to the EFD Consolidated Database schema that are *forward compatible*. It is possible to add new tables and columns to existing tables in the Consolidated Database at any given time.
+The proposed solution is flexible enough to allow changes to the EFD Consolidated Database schema that are *forward compatible*. It is possible to add new tables and new columns to existing tables in the Consolidated Database at any given time.
 The forward compatibility of the EFD Consolidated Database schema ensures that queries that worked with the old schema continue to work with the new schema.
 Similarly, queries designed to work with the new schema only return meaningful values for data inserted *after* the schema change.
 
 The above may represent a limitation for the current solution because the proposed process will not perform a batch load of the historical EFD data when the Consolidated Database schema changes.
 Replay the raw EFD data from Parquet files to Kafka might be an option, but it is out of the scope of this implementation.
 
-**Is the EFD transformation service also responsible for creating "Exposure tables" for the AT and the MT in the Consolidated Database?**
+**Is the EFD transformation service also responsible for creating "Exposure tables" for the Auxiliary Telescope and the Main Telescope in the Consolidated Database?**
 
 DMTN-050 mentions relations between the telemetry tables and Exposure tables, but it is not clear who is responsible for creating the latter.
 
